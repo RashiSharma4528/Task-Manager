@@ -3,54 +3,57 @@ from __future__ import annotations
 import logging
 from typing import Any, cast
 
-from django.contrib import messages
 from django.contrib.auth import login, logout
-from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import ValidationError
-from django.http import HttpRequest
 from rest_framework import status
-from rest_framework.authtoken.models import Token
+#from rest_framework.authtoken.models import Token
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.utils.decorators import method_decorator
-from django.views import View
 from django_ratelimit.decorators import ratelimit
+from drf_spectacular.utils import extend_schema
 
+from .serializers import LoginSerializer, RegisterSerializer
 from .services import AuthService
 
 logger = logging.getLogger(__name__)
 
+# CHANGE 1: BACKEND constant add kiya
+BACKEND = "apps.users.auth_backends.EmailAuthBackend"
 
-# ── Mixin — Block authenticates users ───────────────────────────────────
-class RedirectAuthenticatedMixin:
-    redirect_authenticated_to: str = "dashboard"
+# ── Register ───────────────────────────────────────────────────
+class RegisterView(APIView):  # CHANGE 3: Mixin hata diya
+    permission_classes = [AllowAny]
 
-    def dispatch(self, request: Request, *args: Any, **kwargs: Any) -> Response:  # type: ignore[no-untyped-def]
+    @extend_schema(
+        request=RegisterSerializer,
+        responses={201: RegisterSerializer},
+        summary="Register a new user",
+        tags=["Auth"],
+    )
+    def post(self, request: Request) -> Response:
+
+        # CHANGE 4: already logged in check seedha post() mein
         if request.user.is_authenticated:
             return Response(
                 {"detail": "You are already logged in."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        return super().dispatch(request, *args, **kwargs)  # type: ignore[misc]
 
-
-# ── Register ───────────────────────────────────────────────────────────────────
-class RegisterView(RedirectAuthenticatedMixin, APIView):
-    permission_classes = [AllowAny]
-
-    def post(self, request: Request) -> Response:
         try:
-            user = AuthService.register_user(request.data)  # request.POST → request.data
-            login(request._request, user)  # type: ignore[arg-type]
+            user = AuthService.register_user(request.data)
+
+            # CHANGE 5: backend= explicitly pass kiya
+            login(request._request, user, backend=BACKEND)
 
             logger.info("New user registered: %s", user.username)
             return Response(
                 {
                     "message": "Welcome! Your account has been created.",
                     "user": {
-                        "id": user.id, # type: ignore
+                        "id": user.id,
                         "username": user.username,
                         "email": user.email,
                     },
@@ -70,31 +73,47 @@ class RegisterView(RedirectAuthenticatedMixin, APIView):
             )
 
 
-# ── Login ──────────────────────────────────────────────────────────────────────
+# ── Login ──────────────────────────────────────────────────────
 @method_decorator(
     ratelimit(key="ip", rate="5/m", method="POST", block=True),
     name="dispatch",
 )
-class LoginView(RedirectAuthenticatedMixin, APIView):
+class LoginView(APIView):  # CHANGE 6: Mixin hata diya
     permission_classes = [AllowAny]
 
+    @extend_schema(
+        request=LoginSerializer,
+        responses={200: LoginSerializer},
+        summary="Login with email and password",
+        tags=["Auth"],
+    )
     def post(self, request: Request) -> Response:
+
+        # CHANGE 7: already logged in check seedha post() mein
+        if request.user.is_authenticated:
+            return Response(
+                {"detail": "You are already logged in."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         try:
-            user = AuthService.login_user(request.data)  # request.POST → request.data
-            login(request._request, user)  # type: ignore[arg-type]
+            user = AuthService.login_user(request.data)
+
+            # CHANGE 8: backend= explicitly pass kiya
+            login(request._request, user, backend=BACKEND)
 
             logger.info("Successful login: %s", user.email)
 
-            next_url = _safe_next(request)  # purana function same hai
+            next_url = _safe_next(request)
             return Response(
                 {
                     "message": f"Welcome back, {user.username}!",
                     "user": {
-                        "id": user.id, # type: ignore
+                        "id": user.id,
                         "username": user.username,
                         "email": user.email,
                     },
-                    "next": next_url,  # frontend khud redirect karega
+                    "next": next_url,
                 },
                 status=status.HTTP_200_OK,
             )
@@ -110,18 +129,26 @@ class LoginView(RedirectAuthenticatedMixin, APIView):
             )
 
 
-# ── Logout ─────────────────────────────────────────────────────────────────────
+# ── Logout ─────────────────────────────────────────────────────
 class LogoutView(APIView):
-    permission_classes = [IsAuthenticated]  # LoginRequiredMixin → IsAuthenticated
+    permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        request=None,
+        responses={200: None},
+        summary="Logout current user",
+        tags=["Auth"],
+    )
     def post(self, request: Request) -> Response:
         username = request.user.username
-        
-        # Delete token for REST Framework auth
-        try:
-            Token.objects.get(user=request.user).delete() # current user ka token delete.
-        except Token.DoesNotExist:
-            pass
+
+        # try:
+        #     Token.objects.get(user=request.user).delete()
+        # except Token.DoesNotExist:
+        #     pass
+
+        # CHANGE 9: logout mein _request use kiya
+        logout(request._request)
 
         logger.info("User logged out: %s", username)
         return Response(
@@ -130,7 +157,7 @@ class LogoutView(APIView):
         )
 
 
-# ── Safe Redirect — bilkul same, sirf next_url frontend ko bhej rahe hain ──────
+# ── Safe Redirect ──────────────────────────────────────────────
 def _safe_next(request: Request, fallback: str = "dashboard") -> str:
     from urllib.parse import urlparse
 

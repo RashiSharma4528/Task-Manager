@@ -1,4 +1,10 @@
+from __future__ import annotations
+
 from typing import TYPE_CHECKING
+
+import logging
+import uuid
+from django.contrib.auth import authenticate, get_user_model
 
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.password_validation import validate_password
@@ -29,10 +35,10 @@ class AuthService:
         full_name = (data.get("full_name") or "").strip()
 
         # Required field validation
-        if not username:
-            raise ValidationError({
-                "username": ["Username is required."]
-            })
+        # if not username:
+        #     raise ValidationError({
+        #         "username": ["Username is required."]
+        #     })
 
         if not email:
             raise ValidationError({
@@ -66,6 +72,7 @@ class AuthService:
             })
 
         # Create user
+        username = f"usr_{uuid.uuid4().hex[:8]}"
         user = User.objects.create_user(
             username=username,
             email=email,
